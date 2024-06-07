@@ -37,7 +37,7 @@ from langchain_core.runnables import RunnableParallel
 from langchain_core.output_parsers import StrOutputParser
 from langchain_experimental.agents import create_pandas_dataframe_agent
 from langchain.callbacks.streaming_stdout import StreamingStdOutCallbackHandler
-
+from langchain.callbacks.streaming_aiter import AsyncIteratorCallbackHandler
 
 from .milvus_retriever import milvus_retriever
 # nest_asyncio.apply()
@@ -329,10 +329,6 @@ class car_manual_generator():
             img_path = os.path.join(context_root_dir, img_path)
             img = Image.open(img_path)
             display(img)
-            # imshow(np.asarray(img))
-
-            # img.show()
-            # display(img)
             
         for img_path in context_bag['table_image_urls']:
             # TODO: 벡터 DB 구축시 이미지 URL 변경필요
@@ -340,9 +336,40 @@ class car_manual_generator():
             img_path = os.path.join(context_root_dir, img_path)
             img = Image.open(img_path)
             display(img)
-            # imshow(np.asarray(img))
-
-            # img.show()
-            # display(img)   
         return reduce_answer, context_answer, context_bag, docs, scores
     
+    
+    
+    async def _agenerate_answer(self, query, stream_it: AsyncIteratorCallbackHandler):
+        logger.info("Start searching DB")
+        docs, scores = self.get_context(query)
+        context_bag = self.create_context_bag(docs)
+        logger.info("End searching DB")
+
+        logger.info("Start map query")
+        async_map_context_result = await self.map_context(context_bag, query)
+        logger.info("End map query")
+
+        context_answer = list(map(lambda x: x[1], async_map_context_result[0].items()))
+        if len(context_bag['table_csv_urls'])>0:
+            context_table_retriever_result = list(map(lambda x: x['output'], async_map_context_result[1]))
+            context_answer = context_answer + context_table_retriever_result
+        context_answer = dict(map(lambda x: (f"context{x[0]}", x[1]), zip(range(len(context_answer)), context_answer)))
+
+        reduce_model = ChatOpenAI(api_key=self.openai_api_key, 
+                              temperature=0, 
+                              model=self.reduce_model,
+                              streaming=True,
+                              callbacks=[stream_it]) 
+        qa_reduce_template = ChatPromptTemplate.from_template(self.qa_reduce_prompt)
+        reduce_chain = qa_reduce_template | reduce_model | StrOutputParser()
+        logger.info("Start reducing Context")
+        reduce_answer = await reduce_chain.ainvoke({"query": query, "context":context_answer})
+        
+        return reduce_answer, context_answer, context_bag, docs, scores
+    
+    async def agenerate_answer(self, query: str, stream_it: AsyncIteratorCallbackHandler):
+        task = asyncio.create_task(self._agenerate_answer(query, stream_it))
+        async for token in stream_it.aiter():
+            yield token
+        await task

@@ -5,7 +5,8 @@ import os
 import io
 import base64
 
-
+from langchain.callbacks.streaming_aiter import AsyncIteratorCallbackHandler
+from fastapi.responses import StreamingResponse
 
 from rag.car_manual_bot import car_manual_generator
 
@@ -61,6 +62,14 @@ def generate_car_manual_answer(q: str = None):
         img = Image.open(img_abs_path)
         pil_image_list.append(from_image_to_bytes(img))
     return {"query": q, "answer": reduce_answer, 'image': pil_image_list}
+
+@app.get("/aget_car_information/")
+async def agenerate_car_manual_answer(query: str):
+    stream_it = AsyncIteratorCallbackHandler()
+    reduce_answer_iter = text_generator.agenerate_answer(query, stream_it)
+
+    return StreamingResponse(reduce_answer_iter, media_type="text/event-stream")
+
 
 @app.get("/items/{item_id}")
 def read_item(item_id: int, q: Union[str, None] = None):
