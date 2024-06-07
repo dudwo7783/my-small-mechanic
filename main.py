@@ -26,8 +26,9 @@ CONTEXT_PATH = '/Users/yj/Kim/1.work/SKR/8.GenAI/my-small-mechanic/pdf_context'
 sparse_params = {"drop_ratio_search": 0.01}
 dense_params = {"ef": 100}
 
-# text_generator = car_manual_generator(OPENAI_API_KEY, NAMESPACE, milvus_host, milvus_port, DB_COLLECTION_NAME, 10, rrk_weight=(0, 1),
-#                                       score_filter=True, threshold=0.3, drop_duplicates=True, context_path=CONTEXT_PATH)
+text_generator = car_manual_generator(OPENAI_API_KEY, NAMESPACE, milvus_host, milvus_port, DB_COLLECTION_NAME, 10, rrk_weight=(0, 1),
+                                      score_filter=True, threshold=0.3, drop_duplicates=True, context_path=CONTEXT_PATH, device='mps')
+
 
 app = FastAPI()
 
@@ -49,10 +50,9 @@ def from_image_to_bytes(img):
 def read_root():
     return {"Hello": "World"}
 
-@app.get("/namespace/{namespace}")
-def generate_car_manual_answer(namespace: str, q: str = None):
-    text_generator = car_manual_generator(OPENAI_API_KEY, namespace, milvus_host, milvus_port, DB_COLLECTION_NAME, 10, rrk_weight=(0, 1),
-                                      score_filter=True, threshold=0.3, drop_duplicates=True, context_path=CONTEXT_PATH)
+@app.get("/get_car_information/")
+def generate_car_manual_answer(q: str = None):
+    
     reduce_answer, context_answer, context_bag, docs, scores =  text_generator.generate_answer(q)
     
     pil_image_list = []

@@ -39,8 +39,8 @@ from langchain_experimental.agents import create_pandas_dataframe_agent
 from langchain.callbacks.streaming_stdout import StreamingStdOutCallbackHandler
 
 
-from milvus_retriever import milvus_retriever
-nest_asyncio.apply()
+from .milvus_retriever import milvus_retriever
+# nest_asyncio.apply()
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
