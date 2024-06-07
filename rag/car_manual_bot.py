@@ -9,6 +9,7 @@ from PIL import Image
 from matplotlib.pyplot import imshow
 import pandas as pd
 import logging
+from transformers import pipeline
 
 from langchain_core.documents.base import Document
 from langchain.prompts import (
@@ -55,7 +56,7 @@ class car_manual_generator():
 
     def __init__(self, openai_api_key, namespace, milvus_host, milvus_port, db_collection_name, topK, llm_model="gpt-3.5-turbo", rrk_weight=(0.3,0.7),
                  score_filter=True, threshold=0.3, drop_duplicates=False, pandas_llm_model="gpt-3.5-turbo", reduce_model="gpt-3.5-turbo",
-                 map_text_model="gpt-3.5-turbo", context_path='../pdf_context'):
+                 map_text_model="gpt-3.5-turbo", context_path='../pdf_context', device='cpu'):
         self.openai_api_key = openai_api_key
         self.namespace = namespace
         self.milvus_host = milvus_host
@@ -77,6 +78,7 @@ class car_manual_generator():
         self.reduce_model = reduce_model
         self.map_text_model = map_text_model
         self.context_path = context_path
+        self.reranker = pipeline("text-classification", model="Dongjin-kr/ko-reranker", device=device)
 
 
 
@@ -116,19 +118,23 @@ class car_manual_generator():
         child_chunk = pd.DataFrame(pairs)['text_pair'].apply(lambda x: list(map(lambda x: x.page_content, child_text_splitter.create_documents([x])))).explode()
         pairs = list(map(lambda k: {"text":k[0], "text_pair":k[1]}, zip([query]*len(child_chunk), child_chunk)))
                 
-        def rerank(payload):
-            API_URL = "https://api-inference.huggingface.co/models/Dongjin-kr/ko-reranker"
-            headers = {"Authorization": "Bearer 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"}
+        # def rerank(payload):
+        #     API_URL = "https://api-inference.huggingface.co/models/Dongjin-kr/ko-reranker"
+        #     headers = {"Authorization": "Bearer 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"}
 
-            response = requests.post(API_URL, headers=headers, json=payload)
-            return response.json()
+        #     response = requests.post(API_URL, headers=headers, json=payload)
+        #     return response.json()
+        
+        def rerank(pairs):
+            return self.reranker(pairs)
             
      
         logger.info("Start Rerank")
         for i in range(0,3):   
-            output = rerank({
-                "inputs": pairs,
-            })
+            # output = rerank({
+            #     "inputs": pairs,
+            # })
+            output = rerank(pairs)
             if 'error' not in output:
                 break
             else:
@@ -136,7 +142,8 @@ class car_manual_generator():
                 time.sleep(10)
         logger.info("End Rerank")
 
-        scores = list(map(lambda x: x[0]['score'], output))
+        # scores = list(map(lambda x: x[0]['score'], output))
+        scores = list(map(lambda x: x['score'], output))
         score_df = child_chunk.iloc[np.argsort(scores)][::-1].to_frame()
         score_df['score'] = np.array(scores)[np.argsort(scores)[::-1]]
         score_df = score_df.reset_index().drop_duplicates(subset=['index'], keep='first')
