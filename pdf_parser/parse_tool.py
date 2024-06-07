@@ -125,11 +125,12 @@ class PDFProcessor:
                             spans_list.append(None)
                             tbl_df, content = self.table_processor.post_processing_table(self.tables[tbl_num], text_rotation)
                             
-                            csv_url_dir = os.path.join(self.context_file_root_path, 'csv', self.NAMESPACE)
-                            tbl_csv_url = os.path.join(csv_url_dir, f'{self.page_num}_{tbl_num}_table.csv')
+                            csv_url_root_dir = self.context_file_root_path
+                            tbl_csv_file_path = os.path.join('csv', self.NAMESPACE, f'{self.page_num}_{tbl_num}_table.csv')
+                            tbl_csv_url = os.path.join(csv_url_root_dir, tbl_csv_file_path)
                             tbl_df.to_csv(tbl_csv_url, index=False)
                             
-                            csv_url_list.append(tbl_csv_url)
+                            csv_url_list.append(tbl_csv_file_path)
                             contents_list.append(content)
                             # Save Table Image
                             rect = fitz.Rect(self.origin_table_areas[tbl_num].bbox)
@@ -720,10 +721,11 @@ class ImageProcessor:
             image = image.rotate(270,expand=True)
             self.fitz_page.set_rotation(90)
             
-        img_dir = os.path.join(self.context_file_root_path, 'image', self.NAMESPACE)
-        img_url = os.path.join(img_dir, f'{self.page_num}_{index}_table.{ext}')
+        img_root_dir = self.context_file_root_path
+        img_file_path = f"image/{self.NAMESPACE}/f'{self.page_num}_{index}_table.{ext}'"
+        img_url = os.path.join(img_root_dir, img_file_path)
         image.save(img_url)
-        return img_url
+        return img_file_path
     
     def save_image(self, index, prev_text, bbox, xres, yres, width, height, ext, size_ratio=1.3, dpi=300):
         
@@ -745,11 +747,11 @@ class ImageProcessor:
         draw.text((10, 10), prev_text, fill='black', font=font)
         
         
-        img_dir = os.path.join(self.context_file_root_path, 'image', self.NAMESPACE)
-        img_url = os.path.join(img_dir, f'{self.page_num}_{index}_img.{ext}')
+        img_root_dir = self.context_file_root_path
+        img_file_path = f"image/{self.NAMESPACE}/f'{self.page_num}_{index}_img.{ext}'"
+        img_url = os.path.join(img_root_dir, img_file_path)
         image.save(img_url)
-        
-        return img_url
+        return img_file_path
 
 
         

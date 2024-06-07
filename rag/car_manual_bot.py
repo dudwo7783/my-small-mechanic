@@ -55,7 +55,7 @@ class car_manual_generator():
 
     def __init__(self, openai_api_key, namespace, milvus_host, milvus_port, db_collection_name, topK, llm_model="gpt-3.5-turbo", rrk_weight=(0.3,0.7),
                  score_filter=True, threshold=0.3, drop_duplicates=False, pandas_llm_model="gpt-3.5-turbo", reduce_model="gpt-3.5-turbo",
-                 map_text_model="gpt-3.5-turbo",):
+                 map_text_model="gpt-3.5-turbo", context_path='../pdf_context'):
         self.openai_api_key = openai_api_key
         self.namespace = namespace
         self.milvus_host = milvus_host
@@ -76,6 +76,7 @@ class car_manual_generator():
         self.pandas_llm_model = pandas_llm_model
         self.reduce_model = reduce_model
         self.map_text_model = map_text_model
+        self.context_path = context_path
 
 
 
@@ -282,7 +283,8 @@ class car_manual_generator():
         
         async_map_task = [asyncio.create_task(self.map_text_context(context_bag, query))]
         if len(context_bag['table_csv_urls'])>0:
-            dfs = list(map(lambda x: pd.read_csv(x), context_bag['table_csv_urls']))
+            context_root_dir = self.context_path
+            dfs = list(map(lambda x: pd.read_csv(context_root_dir + '/' + x), context_bag['table_csv_urls']))
             async_map_task.append(asyncio.create_task(self.map_table_context(dfs, query)))
         output = await asyncio.gather(*async_map_task)
         return output
@@ -314,12 +316,10 @@ class car_manual_generator():
         reduce_answer = reduce_chain.invoke({"query": query, "context":context_answer})
         logger.info("\nEnd reducing Context")
         
-        # img_dir = path.dirname(path.abspath(__file__)) + '/../pdf_context/image'
-        # img_root_path = img_dir+f'/{self.namespace}'
+        context_root_dir = self.context_path
         for img_path in context_bag['image_urls']:
             # TODO: 벡터 DB 구축시 이미지 URL 변경필요
-            # img_path = img_path.split('/')[-1]
-            # img_path = os.path.join(img_root_path, img_path)
+            img_path = os.path.join(context_root_dir, img_path)
             img = Image.open(img_path)
             display(img)
             # imshow(np.asarray(img))
@@ -330,7 +330,7 @@ class car_manual_generator():
         for img_path in context_bag['table_image_urls']:
             # TODO: 벡터 DB 구축시 이미지 URL 변경필요
             # img_path = img_path.split('/')[-1]
-            # img_path = os.path.join(img_root_path, img_path)
+            img_path = os.path.join(context_root_dir, img_path)
             img = Image.open(img_path)
             display(img)
             # imshow(np.asarray(img))
