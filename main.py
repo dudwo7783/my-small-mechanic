@@ -3,12 +3,19 @@ from fastapi import FastAPI
 from PIL import Image
 import os
 import io
+from io import BytesIO
+
 import base64
 
 from langchain.callbacks.streaming_aiter import AsyncIteratorCallbackHandler
-from fastapi.responses import StreamingResponse
-
+from fastapi.responses import StreamingResponse, Response
+from transformers import pipeline
 from rag.car_manual_bot import car_manual_generator
+
+from aiohttp import MultipartWriter, web
+
+
+app = FastAPI()
 
 os.environ["LANGCHAIN_TRACING_V2"]="true"
 os.environ["LANGCHAIN_ENDPOINT"]="https://api.smith.langchain.com"
@@ -26,9 +33,8 @@ NAMESPACE = NAMESPACE_TYPE[0]
 CONTEXT_PATH = '/Users/yj/Kim/1.work/SKR/8.GenAI/my-small-mechanic/pdf_context'
 sparse_params = {"drop_ratio_search": 0.01}
 dense_params = {"ef": 100}
-
-text_generator = car_manual_generator(OPENAI_API_KEY, NAMESPACE, milvus_host, milvus_port, DB_COLLECTION_NAME, 10, rrk_weight=(0, 1),
-                                      score_filter=True, threshold=0.3, drop_duplicates=True, context_path=CONTEXT_PATH, device='mps')
+device='mps'
+reranker = pipeline("text-classification", model="Dongjin-kr/ko-reranker", device=device)
 
 
 app = FastAPI()
@@ -63,14 +69,87 @@ def generate_car_manual_answer(q: str = None):
         pil_image_list.append(from_image_to_bytes(img))
     return {"query": q, "answer": reduce_answer, 'image': pil_image_list}
 
+# @app.get("/aget_car_information/")
+# async def agenerate_car_manual_answer(namespace: str, query: str):
+    
+#     stream_it = AsyncIteratorCallbackHandler()
+#     text_generator = car_manual_generator(OPENAI_API_KEY, namespace, milvus_host, milvus_port, DB_COLLECTION_NAME, 10, rrk_weight=(0.3, 0.7),
+#                                       score_filter=True, threshold=0.3, drop_duplicates=True, context_path=CONTEXT_PATH, reranker=reranker)
+#     reduce_answer_iter = text_generator.agenerate_answer(query, stream_it)
+
+#     return StreamingResponse(reduce_answer_iter, media_type="text/event-stream")
+
+# @app.get("/aget_car_information/")
+# async def agenerate_car_manual_answer(namespace: str, query: str):
+#     stream_it = AsyncIteratorCallbackHandler()
+#     text_generator = car_manual_generator(OPENAI_API_KEY, namespace, milvus_host, milvus_port, DB_COLLECTION_NAME, 10, rrk_weight=(0.3, 0.7),
+#                                           score_filter=True, threshold=0.3, drop_duplicates=True, context_path=CONTEXT_PATH, reranker=reranker)
+    
+#     async def generate_response():
+#         async for chunk, context_bag in text_generator.agenerate_answer(query, stream_it):
+#             yield chunk, context_bag
+
+#     # 멀티파트 응답 생성
+#     boundary = "my-custom-boundary"
+#     multipart_writer = MultipartWriter(boundary=boundary)
+
+#     # 텍스트 부분 추가
+#     async for chunk, context_bag in generate_response():
+#         multipart_writer.append(chunk, {'Content-Type': 'text/plain'})
+        
+#         # 이미지 파일 읽기 및 바이트로 변환
+#         pil_image_list = []
+#         for img_url in context_bag['image_urls']:
+#             img_abs_path = os.path.join(CONTEXT_PATH + '/' + img_url)
+#             img = Image.open(img_abs_path)
+#             pil_image_list.append(from_image_to_bytes(img))
+        
+#         # 이미지 부분 추가
+#         for i, image_bytes in enumerate(pil_image_list):
+#             multipart_writer.append(image_bytes, {'Content-Type': 'image/jpeg'})
+
+#     # 응답 반환
+#     response = web.Response(body=multipart_writer)
+#     response.content_type = f'multipart/form-data; boundary="{boundary}"'
+#     return response
+
 @app.get("/aget_car_information/")
-async def agenerate_car_manual_answer(query: str):
+async def agenerate_car_manual_answer(namespace: str, query: str):
     stream_it = AsyncIteratorCallbackHandler()
-    reduce_answer_iter = text_generator.agenerate_answer(query, stream_it)
+    text_generator = car_manual_generator(OPENAI_API_KEY, namespace, milvus_host, milvus_port, DB_COLLECTION_NAME, 10, rrk_weight=(0.3, 0.7),
+                                          score_filter=True, threshold=0.3, drop_duplicates=True, context_path=CONTEXT_PATH, reranker=reranker)
+    
+    async def generate_response():
+        async for chunk, context_bag in text_generator.agenerate_answer(query, stream_it):
+            yield chunk, context_bag
 
-    return StreamingResponse(reduce_answer_iter, media_type="text/event-stream")
+    # 멀티파트 응답 생성
+    boundary = "my-custom-boundary"
+    
+    async def iterfile():
+        async for chunk, context_bag in generate_response():
+            yield (f"{boundary}\r\n"
+                   f"Content-Type: text/plain\r\n\r\n"
+                   f"{chunk}").encode("utf-8")
 
+            # 이미지 파일 읽기 및 바이트로 변환
+            pil_image_list = []
+            for img_url in context_bag['image_urls']:
+                img_abs_path = os.path.join(CONTEXT_PATH + '/' + img_url)
+                img = Image.open(img_abs_path)
+                buffer = BytesIO()
+                img.save(buffer, format="JPEG")
+                pil_image_list.append(buffer.getvalue())
 
-@app.get("/items/{item_id}")
-def read_item(item_id: int, q: Union[str, None] = None):
-    return {"item_id": item_id, "q": q}
+            # 이미지 부분 추가
+            for i, image_bytes in enumerate(pil_image_list):
+                yield (f"{boundary}\r\n"
+                       f"Content-Type: image/jpeg\r\n"
+                       f"Content-Disposition: attachment; filename=\"image_{i}.jpg\"\r\n\r\n").encode("utf-8")
+                yield image_bytes
+                yield b"\r\n"
+
+        yield f"{boundary}--\r\n".encode("utf-8")
+
+    # 응답 반환
+    return StreamingResponse(iterfile(), media_type=f"multipart/form-data; boundary={boundary}")

@@ -56,7 +56,7 @@ class car_manual_generator():
 
     def __init__(self, openai_api_key, namespace, milvus_host, milvus_port, db_collection_name, topK, llm_model="gpt-3.5-turbo", rrk_weight=(0.3,0.7),
                  score_filter=True, threshold=0.3, drop_duplicates=False, pandas_llm_model="gpt-3.5-turbo", reduce_model="gpt-3.5-turbo",
-                 map_text_model="gpt-3.5-turbo", context_path='../pdf_context', device='cpu'):
+                 map_text_model="gpt-3.5-turbo", context_path='../pdf_context', reranker=None):
         self.openai_api_key = openai_api_key
         self.namespace = namespace
         self.milvus_host = milvus_host
@@ -78,7 +78,7 @@ class car_manual_generator():
         self.reduce_model = reduce_model
         self.map_text_model = map_text_model
         self.context_path = context_path
-        self.reranker = pipeline("text-classification", model="Dongjin-kr/ko-reranker", device=device)
+        self.reranker = reranker#pipeline("text-classification", model="Dongjin-kr/ko-reranker", device=device)
 
 
 
@@ -368,8 +368,17 @@ class car_manual_generator():
         
         return reduce_answer, context_answer, context_bag, docs, scores
     
+    # async def agenerate_answer(self, query: str, stream_it: AsyncIteratorCallbackHandler):
+    #     task = asyncio.create_task(self._agenerate_answer(query, stream_it))
+    #     async for token in stream_it.aiter():
+    #         yield token
+    #     await task
+        
     async def agenerate_answer(self, query: str, stream_it: AsyncIteratorCallbackHandler):
-        task = asyncio.create_task(self._agenerate_answer(query, stream_it))
-        async for token in stream_it.aiter():
-            yield token
-        await task
+        async def async_generator():
+            reduce_answer, _, context_bag, _, _ = await self._agenerate_answer(query, stream_it)
+            for token in reduce_answer:
+                yield token, context_bag
+
+        async for token, context_bag in async_generator():
+            yield token, context_bag
