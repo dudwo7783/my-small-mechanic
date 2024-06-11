@@ -69,50 +69,6 @@ def generate_car_manual_answer(q: str = None):
         pil_image_list.append(from_image_to_bytes(img))
     return {"query": q, "answer": reduce_answer, 'image': pil_image_list}
 
-# @app.get("/aget_car_information/")
-# async def agenerate_car_manual_answer(namespace: str, query: str):
-    
-#     stream_it = AsyncIteratorCallbackHandler()
-#     text_generator = car_manual_generator(OPENAI_API_KEY, namespace, milvus_host, milvus_port, DB_COLLECTION_NAME, 10, rrk_weight=(0.3, 0.7),
-#                                       score_filter=True, threshold=0.3, drop_duplicates=True, context_path=CONTEXT_PATH, reranker=reranker)
-#     reduce_answer_iter = text_generator.agenerate_answer(query, stream_it)
-
-#     return StreamingResponse(reduce_answer_iter, media_type="text/event-stream")
-
-# @app.get("/aget_car_information/")
-# async def agenerate_car_manual_answer(namespace: str, query: str):
-#     stream_it = AsyncIteratorCallbackHandler()
-#     text_generator = car_manual_generator(OPENAI_API_KEY, namespace, milvus_host, milvus_port, DB_COLLECTION_NAME, 10, rrk_weight=(0.3, 0.7),
-#                                           score_filter=True, threshold=0.3, drop_duplicates=True, context_path=CONTEXT_PATH, reranker=reranker)
-    
-#     async def generate_response():
-#         async for chunk, context_bag in text_generator.agenerate_answer(query, stream_it):
-#             yield chunk, context_bag
-
-#     # 멀티파트 응답 생성
-#     boundary = "my-custom-boundary"
-#     multipart_writer = MultipartWriter(boundary=boundary)
-
-#     # 텍스트 부분 추가
-#     async for chunk, context_bag in generate_response():
-#         multipart_writer.append(chunk, {'Content-Type': 'text/plain'})
-        
-#         # 이미지 파일 읽기 및 바이트로 변환
-#         pil_image_list = []
-#         for img_url in context_bag['image_urls']:
-#             img_abs_path = os.path.join(CONTEXT_PATH + '/' + img_url)
-#             img = Image.open(img_abs_path)
-#             pil_image_list.append(from_image_to_bytes(img))
-        
-#         # 이미지 부분 추가
-#         for i, image_bytes in enumerate(pil_image_list):
-#             multipart_writer.append(image_bytes, {'Content-Type': 'image/jpeg'})
-
-#     # 응답 반환
-#     response = web.Response(body=multipart_writer)
-#     response.content_type = f'multipart/form-data; boundary="{boundary}"'
-#     return response
-
 @app.get("/aget_car_information/")
 async def agenerate_car_manual_answer(namespace: str, query: str):
     stream_it = AsyncIteratorCallbackHandler()
