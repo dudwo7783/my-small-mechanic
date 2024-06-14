@@ -22,7 +22,7 @@ from langchain_openai import OpenAIEmbeddings, ChatOpenAI
 from langchain.callbacks.streaming_stdout import StreamingStdOutCallbackHandler
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 import asyncio
-import nest_asyncio
+# import nest_asyncio
 
 import pandas as pd
 import numpy as np
@@ -341,7 +341,7 @@ class car_manual_generator():
     
     
     async def _agenerate_answer(self, query, stream_it: AsyncIteratorCallbackHandler):
-        logger.info("Start searching DB")
+        logger.info(f"Start searching DB: {self.namespace}")
         docs, scores = self.get_context(query)
         context_bag = self.create_context_bag(docs)
         logger.info("End searching DB")
@@ -366,7 +366,8 @@ class car_manual_generator():
         logger.info("Start reducing Context")
         reduce_answer = await reduce_chain.ainvoke({"query": query, "context":context_answer})
         
-        return reduce_answer, context_answer, context_bag, docs, scores
+        
+        return reduce_answer, context_bag
     
     # async def agenerate_answer(self, query: str, stream_it: AsyncIteratorCallbackHandler):
     #     task = asyncio.create_task(self._agenerate_answer(query, stream_it))
@@ -374,11 +375,17 @@ class car_manual_generator():
     #         yield token
     #     await task
         
-    async def agenerate_answer(self, query: str, stream_it: AsyncIteratorCallbackHandler):
-        async def async_generator():
-            reduce_answer, _, context_bag, _, _ = await self._agenerate_answer(query, stream_it)
-            for token in reduce_answer:
-                yield token, context_bag
+    # async def agenerate_answer(self, query: str, stream_it: AsyncIteratorCallbackHandler):
+    #     async def async_generator():
+    #         reduce_answer, _, context_bag, _, _ = await self._agenerate_answer(query, stream_it)
+    #         for token in reduce_answer:
+    #             yield token, context_bag
 
-        async for token, context_bag in async_generator():
-            yield token, context_bag
+    #     async for token, context_bag in async_generator():
+    #         yield token, context_bag
+    
+    # async def agenerate_answer(self, query: str, stream_it: AsyncIteratorCallbackHandler):
+    #     task = asyncio.create_task(self._agenerate_answer(query, stream_it))
+    #     async for token in stream_it.aiter():
+    #         yield token
+    #     return await task

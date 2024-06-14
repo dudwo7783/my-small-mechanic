@@ -1,137 +1,272 @@
-# import streamlit as st
-# import httpx
-# import asyncio
-# from httpx import TimeoutException
-
-
-# async def get_streaming_response(namespace, query):
-#     async with httpx.AsyncClient(timeout=None) as client:
-#         async with client.stream('GET', 'http://localhost:8000/aget_car_information/', params={'namespace':namespace,'query': query}) as response:
-#             async for chunk in response.aiter_text():
-#                 yield chunk
-
-# async def process_query(namespace, query):
-#     # Create a container for the streaming response
-#     response_container = st.empty()
-
-#     # Display a message while waiting for the response
-#     with st.spinner("Waiting for response..."):
-#         try:
-#             # Buffer to store the incoming chunks
-#             buffer = ""
-
-#             # Get the streaming response from FastAPI
-#             async for chunk in get_streaming_response(namespace, query):
-#                 # Append the chunk to the buffer
-#                 buffer += chunk
-#                 response_container.markdown(buffer, unsafe_allow_html=True)
-
-#         except TimeoutException:
-#             pass
-
-# def main():
-#     st.title("Car Manual Generator")
-
-#     # Get the query from the user
-#     namespace = st.text_input("차량 ID를 입력하세요.")
-    
-#     query = st.text_input("Enter your question about the car manual:")
-
-#     if st.button("Submit"):
-#         if query and namespace:
-#             # Process the query when the button is clicked
-#             asyncio.run(process_query(namespace, query))
-#         else:
-#             st.warning("Please enter a question.")
-
-# if __name__ == '__main__':
-#     main()
-
-import streamlit as st
+import random
 import time
+import streamlit as st
+import sqlite3
+import json
+import ast
+
+from langchain.agents import initialize_agent
+from langchain.agents.tools import Tool
+from langchain.chains import LLMChain
+from langchain.callbacks import StreamlitCallbackHandler
+from langchain.memory import ConversationBufferMemory
+
 import httpx
 import asyncio
 from httpx import TimeoutException
-from PIL import Image
-from io import BytesIO
-import logging
-# 1. logger 생성
-logger = logging.getLogger("main")
 
-# 2. logger 레벨 설정
-logger.setLevel(logging.DEBUG)
-# 또는
-logging.basicConfig(level=logging.DEBUG)
-
-# 3. formatting 설정
-formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-stream_hander = logging.StreamHandler()
-stream_hander.setFormatter(formatter)
-logger.addHandler(stream_hander)
+CONTEXT_PATH = '/Users/yj/Kim/1.work/SKR/8.GenAI/my-small-mechanic/pdf_context'
 
 
 async def get_streaming_response(namespace, query):
     async with httpx.AsyncClient(timeout=None) as client:
         async with client.stream('GET', 'http://localhost:8000/aget_car_information/', params={'namespace': namespace, 'query': query}) as response:
-            async for chunk in response.aiter_bytes():
+            # TODO: ver 1
+            # TODO: json 분리 확인 1 response['text']
+            # TODO: 안되면 아래처럼
+            async for chunk in response.aiter_text():
                 yield chunk
 
-async def process_query(namespace, query):
-    # Create containers for the streaming response and images
-    response_container = st.empty()
-    image_container = st.container()
-    answer = ""
+class ChatBot:
+    def __init__(self, namespace):
+        self.messages = []
+        self.type=0
+        self.id=1
+        self.answer = []
+        self.set_num = -999
+        self.namespace = namespace
+    # 글자 타이핑 되도록 이펙트
+    def stream_data(self, text):
+        st.toast("답변 생성중입니다......")
+        for word in text.split(" "):
+            yield word + " "
+            time.sleep(0.2)
 
-    # Display a message while waiting for the response
-    with st.spinner("Waiting for response..."):
-        try:
-            # Buffer to store the incoming chunks
-            buffer = b""
-            boundary = b"my-custom-boundary"
-            image_data = []
-
-            # Get the streaming response from FastAPI
-            async for chunk in get_streaming_response(namespace, query):
-                
-                buffer += chunk
-                parts = buffer.split(boundary)
-                buffer = parts.pop()
-
-                for part in parts:
-                    part_data = part.split(b"\r\n\r\n")
-                    if len(part_data) >= 2:
-
-                        header, data = part_data[0], part_data[1]
-                        if b"Content-Type: text/plain" in header:
-                            # logger.info(data.decode("utf-8"))
-                            # await asyncio.sleep(1)
-                            token = data.decode("utf-8")#.rstrip()
-                            answer = answer + token
-                            response_container.markdown(answer, unsafe_allow_html=True)
-                        elif b"Content-Type: image/jpeg" in header:
-                            image_data.append(data.strip())
-
-            # Display the images
-            for image_bytes in list(set(image_data)):
-                image = Image.open(BytesIO(image_bytes))
-                image_container.image(image, use_column_width=True)
-
-        except TimeoutException:
-            st.error("Request timed out. Please try again.")
-
-def main():
-    st.title("Car Manual Generator")
-
-    # Get the query from the user
-    namespace = st.text_input("차량 ID를 입력하세요.")
-    query = st.text_input("Enter your question about the car manual:")
-
-    if st.button("Submit"):
-        if query and namespace:
-            # Process the query when the button is clicked
-            asyncio.run(process_query(namespace, query))
+    # Button 클릭 시 작동
+    def display_question_buttons(self, answer_type):
+        conn = sqlite3.connect('button.db')
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM button WHERE id=?", (self.id,))
+        result = cursor.fetchone()
+        response = json.loads(result[2])
+        # print(result)
+        if result[4] == 0:
+            with st.chat_message("assistant"):
+                for index, res in enumerate(response):
+                    print(res, index)
+                    ind = str(self.id) + '_' + str(index)
+                    if st.button(res, key=f"question_{ind}", type="primary"):
+                        cursor.execute("SELECT * FROM button WHERE question=?", (res,))
+                        self.answer = cursor.fetchone()
+                        if self.answer[4]==2:
+                            self.messages.append({"role": "user", "content": res})
+                            self.type = 1
+                        else:
+                            # TODO: self.id정의를 끝에서 하되 여기서 누른것의 id를 self.id로 하는 것을 마지막에 추가해줘야함 그럼 breakㅠ필요 없음
+                            st.session_state.clicked = True
+                            text = response
+                            assis_res = {"text": [text, res], 'image': None}
+                            self.messages.append({"role": "assistant", "content": assis_res, "answer_type": answer_type})
+                            self.messages.append({"role": "user", "content": res})
+                else:
+                    if self.answer:
+                        self.set_num = self.answer[0]
+            if self.set_num != -999:
+                self.id = self.set_num
+            # st.rerun()
+            if st.session_state.clicked:
+                st.session_state.clicked = False
+                st.rerun()
         else:
-            st.warning("Please enter a question and namespace.")
+            self.type = 1
+            text = json.loads(result[2])[0]
+            image_paths = json.loads(result[3])
+            res = {"text": text, "image": image_paths}
+            question = result[1]
+            answer_type='image'
+            # self.messages.append({"role": "user", "content": question})
+            self.messages.append({"role": "assistant", "content": res, "answer_type": answer_type})
+            with st.chat_message("assistant"):
+                
+                st.write_stream(response)
+                with st.expander("Click to view images"):
+                    if len(image_paths) != 0:
+                        cols = st.columns(len(image_paths))
+                        for i, image_path in enumerate(image_paths):
+                            with cols[i]:
+                                st.image(CONTEXT_PATH + '/' + image_path)
+            
+            asyncio.run(self.handle_user_input(answer_type))
+            # Display a message while waiting for the response
 
-if __name__ == '__main__':
-    main()
+    def display_chat_history(self):
+        for message in self.messages:
+            with st.chat_message(message["role"]):
+                content = message["content"]
+                if message["role"]=='assistant':
+                    # print("displayChat: content")
+                    # print(content)
+                    if message['answer_type']=='image':
+                        st.markdown(content["text"])
+                    else:
+                        for index, res in enumerate(content['text'][0]):
+                            if res != content['text'][1]:
+                                st.button(res)
+                            else:
+                                st.button(res, type="primary")
+                else:
+                    st.markdown(content)
+                
+                if message["role"]=='assistant' and content["image"] != None and message["answer_type"] == "image":
+                    image_paths = content["image"]
+                    if len(image_paths) != 0:
+                        with st.expander("Click to view images"):
+                            cols = st.columns(len(image_paths))
+                            for i, image_path in enumerate(image_paths):
+                                # print("#1 Image Path")
+                                # print(image_path)
+                                with cols[i]:
+                                    st.image(CONTEXT_PATH + '/' + image_path)
+
+    async def handle_user_input(self, answer_type):
+        user_input = st.chat_input("질문할 내용을 적어주세요: ", key="user_input")
+        if user_input:
+            
+            st.chat_message("user").write(user_input)
+            st.toast("Searching......")
+            self.messages.append({"role": "user", "content": user_input})
+            with st.chat_message("assistant"):
+                response_container = st.empty()
+                image_container = st.container()
+                answer = ''
+                image_paths = ''
+                with st.spinner("Waiting for response..."):
+                    try:
+                        buffer = b""
+                        boundary = b"my-custom-boundary"
+                        
+                        
+                        async for chunk in get_streaming_response(self.namespace, user_input):
+                            buffer += chunk.encode('utf-8')  # chunk를 바이트로 변환
+                            parts = buffer.split(boundary)
+                            
+                            # buffer = parts.pop()
+                            # print(buffer)
+                            for part in parts:
+                                part_data = part.split(b"\r\n\r\n")
+
+                            if len(part_data) >= 2:
+                                header, data = part_data[0], part_data[1]
+
+                                if b"Content-Type: text/event-stream" in header:
+                                    # print('after if')
+                                    # print(data)
+                                    print(data.decode("utf-8"))
+                                    # await asyncio.sleep(0.1)
+                                    token = data.decode("utf-8")  # .rstrip()
+                                    answer += token
+                                    response_container.markdown(answer)        
+                                elif b"Content-Type: text/plain" in header:
+                                    # image_data.append(data.strip())
+                                    image_paths = data.decode('utf-8')  # 이미지 경로를 문자열로 변환     
+                            # else: 
+                            #     temp = answer
+                            # unsafe_allow_html=True
+                                
+                        else:
+                            print(image_paths)
+                            if image_paths != '':
+                                image_paths = ast.literal_eval(image_paths)
+                                response_container.markdown(answer)# unsafe_allow_html=True
+                                with image_container.expander("Click to view images"):
+                                    if len(image_paths) != 0:
+                                        cols = st.columns(len(image_paths))
+                                        for i, image_path in enumerate(image_paths):
+                                            with cols[i]:
+                                                st.image(CONTEXT_PATH + '/' + image_path)
+                                assistant_response = {"text": answer, "image": image_paths}
+                                self.messages.append({"role": "assistant", "content": assistant_response, "answer_type": answer_type})
+                            else:
+                                response_container.markdown(answer)
+                                assistant_response = {"text": answer, "image": None}
+                                self.messages.append({"role": "assistant", "content": assistant_response, "answer_type": answer_type})
+                    except TimeoutException:
+                        pass
+
+    def side_bar(self):
+        with st.sidebar:
+            car_model = st.selectbox(
+                "차정",
+                ("IONIQ5 2024", "SANTAFE MX5 2023", "SONATA DN8 2024")
+            )
+            st.session_state.car_model = car_model
+            if car_model == 'IONIQ5 2024':
+                self.namespace = 'IONIQ5_2024'
+            if car_model == 'SANTAFE MX5 2023':
+                self.namespace = 'SANTAFE_MX5_2023'
+            if car_model == 'SONATA DN8 2024':
+                self.namespace = 'SONATA_DN8_2024'
+            for ind, chat in enumerate(['./messages_1.txt', './messages_2.txt', './messages_3.txt'], 1):
+                with open(chat, "r") as file:
+                    # 파일 내용 읽기
+                    content = file.read()
+                    # JSON 형식으로 변환
+                    temp = json.loads(content)
+                first_text = temp[-1]['content']['text'][:10]
+                if st.button(f'Chat_{ind}: {first_text}', key=f"side_bar_{ind}", type="secondary"):
+                    st.session_state.clicked = True
+                    self.messages = temp
+            if st.session_state.clicked:
+                st.session_state.clicked = False
+                self.type = 1
+                st.rerun()
+
+
+    def run(self):
+        print("START")
+        self.side_bar()
+        # with st.spinner("Loading..."):
+        #     time.sleep(5)
+        # st.success("Done!")
+        st.title(f"My Small Javis ver.{st.session_state.car_model}")
+        # 첫 클릭 후에도 first, third in 둘다 발생
+        # TODO: 버튼을 눌렀을 경우 바로 message에 append 되지 않음
+        print(self.messages)
+        if len(self.messages) == 0:
+            print("First if IN")
+            answer_type = "button"
+            self.display_question_buttons(answer_type)
+
+        print("First if AFTER")
+        self.display_chat_history()
+        if len(self.messages) > 0:
+            # print(1)
+            # print("Second if IN")
+            last_message = self.messages[-1]
+            answer_type = last_message.get("answer_type", "image")
+            if self.type==0:
+                # print(2)
+                print("Third if IN")
+                answer_type = "button"
+                self.display_question_buttons(answer_type)
+            else:
+                # print(3)
+                print("Forth if IN")
+                answer_type="image"
+                asyncio.run(self.handle_user_input(answer_type))
+        print("END")
+
+if "chat_bot" not in st.session_state:
+    st.session_state.clicked = False
+    st.session_state.personal_id=-999
+    st.session_state.car_model = '아이오닉5'
+    
+    if st.session_state.car_model == '아이오닉5':
+        namespace = 'IONIQ5_2024'
+    elif st.session_state.car_model == '산타페 MX5':
+        namespace = 'SANTAFE_MX5_2023'
+    elif st.session_state.car_model == 'SONATA DN8':
+        namespace = 'SONATA_DN8_2024'
+    st.session_state.chat_bot = ChatBot(namespace)
+
+st.session_state.chat_bot.run()
