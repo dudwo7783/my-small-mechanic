@@ -17,6 +17,9 @@ from langchain.prompts import (
     SystemMessagePromptTemplate, 
     HumanMessagePromptTemplate,
 )
+from langchain_core.runnables.history import RunnableWithMessageHistory
+
+from langchain_community.chat_message_histories import RedisChatMessageHistory
 from langchain.schema import SystemMessage, HumanMessage
 from langchain_openai import OpenAIEmbeddings, ChatOpenAI
 from langchain.callbacks.streaming_stdout import StreamingStdOutCallbackHandler
@@ -54,9 +57,9 @@ logger.addHandler(stream_handler)
     
 class car_manual_generator():
 
-    def __init__(self, openai_api_key, namespace, milvus_host, milvus_port, db_collection_name, topK, llm_model="gpt-3.5-turbo", rrk_weight=(0.3,0.7),
-                 score_filter=True, threshold=0.3, drop_duplicates=False, pandas_llm_model="gpt-3.5-turbo", reduce_model="gpt-3.5-turbo",
-                 map_text_model="gpt-3.5-turbo", context_path='../pdf_context', reranker=None):
+    def __init__(self, openai_api_key, namespace, milvus_host, milvus_port, db_collection_name, topK, llm_model="gpt-4-turbo", rrk_weight=(0.3,0.7),
+                 score_filter=True, threshold=0.3, drop_duplicates=False, pandas_llm_model="gpt-4-turbo", reduce_model="gpt-4-turbo",
+                 map_text_model="gpt-4-turbo", context_path='../pdf_context', reranker=None):
         self.openai_api_key = openai_api_key
         self.namespace = namespace
         self.milvus_host = milvus_host
@@ -79,13 +82,16 @@ class car_manual_generator():
         self.map_text_model = map_text_model
         self.context_path = context_path
         self.reranker = reranker#pipeline("text-classification", model="Dongjin-kr/ko-reranker", device=device)
+        self.redis_url = "redis://localhost:6379"
+        # self.session_id  = session_id
 
 
 
         prompt_dir = path.dirname(path.abspath(__file__)) + '/prompt'
+        with open(prompt_dir + '/system_template.txt', 'r') as f:
+            self.system_prompt = f.read()
         with open(prompt_dir + '/qa_map_template.txt', 'r') as f:
             self.qa_map_prompt = f.read()
-            
         with open(prompt_dir + '/qa_reduce_template.txt', 'r') as f:
             self.qa_reduce_prompt = f.read()
 
@@ -262,7 +268,13 @@ class car_manual_generator():
             
         map_context_chains = {}
         for k, context in context_bag['text_context_bag'].items():
-            qa_map_template = ChatPromptTemplate.from_template(self.qa_map_prompt)
+            # qa_map_template = ChatPromptTemplate.from_template(self.qa_map_prompt)
+            qa_map_template = ChatPromptTemplate.from_messages([
+                ("system", self.system_prompt),
+                ("user", self.qa_map_prompt)
+            ])
+
+
             chain = qa_map_template.partial(context=context) | map_llm | StrOutputParser()
             map_context_chains[f'context{k}'] = chain
             
@@ -317,8 +329,14 @@ class car_manual_generator():
                               model=self.reduce_model,
                               streaming=True,
                               callbacks=[StreamingStdOutCallbackHandler()]) 
-        qa_reduce_template = ChatPromptTemplate.from_template(self.qa_reduce_prompt)
+        # qa_reduce_template = ChatPromptTemplate.from_template(self.qa_reduce_prompt)
+        qa_reduce_template = ChatPromptTemplate.from_messages([
+                ("system", self.system_prompt),
+                ("user", self.qa_reduce_prompt)
+            ])
+        
         reduce_chain = qa_reduce_template | reduce_model | StrOutputParser()
+        
         logger.info("Start reducing Context")
         reduce_answer = reduce_chain.invoke({"query": query, "context":context_answer})
         logger.info("\nEnd reducing Context")
@@ -331,8 +349,6 @@ class car_manual_generator():
             display(img)
             
         for img_path in context_bag['table_image_urls']:
-            # TODO: 벡터 DB 구축시 이미지 URL 변경필요
-            # img_path = img_path.split('/')[-1]
             img_path = os.path.join(context_root_dir, img_path)
             img = Image.open(img_path)
             display(img)
@@ -362,30 +378,24 @@ class car_manual_generator():
                               streaming=True,
                               callbacks=[stream_it]) 
         qa_reduce_template = ChatPromptTemplate.from_template(self.qa_reduce_prompt)
+        
+
+
         reduce_chain = qa_reduce_template | reduce_model | StrOutputParser()
-        logger.info("Start reducing Context")
+        
+
+        # with_message_history = RunnableWithMessageHistory(
+        #     reduce_chain,  # 실행 가능한 객체
+        #     lambda : RedisChatMessageHistory(self.session_id, url=self.redis_url),  # 메시지 기록을 가져오는 함수
+        #     input_messages_key="question",  # 입력 메시지의 키
+        #     history_messages_key="chat_history",  # 기록 메시지의 키
+        # )
+        # config = {"configurable": {"session_id": "foo"}}
+        
+        # logger.info("Start reducing Context")
+        # reduce_answer = await reduce_chain.ainvoke({"query": query, "context":context_answer})
         reduce_answer = await reduce_chain.ainvoke({"query": query, "context":context_answer})
         
         
         return reduce_answer, context_bag
     
-    # async def agenerate_answer(self, query: str, stream_it: AsyncIteratorCallbackHandler):
-    #     task = asyncio.create_task(self._agenerate_answer(query, stream_it))
-    #     async for token in stream_it.aiter():
-    #         yield token
-    #     await task
-        
-    # async def agenerate_answer(self, query: str, stream_it: AsyncIteratorCallbackHandler):
-    #     async def async_generator():
-    #         reduce_answer, _, context_bag, _, _ = await self._agenerate_answer(query, stream_it)
-    #         for token in reduce_answer:
-    #             yield token, context_bag
-
-    #     async for token, context_bag in async_generator():
-    #         yield token, context_bag
-    
-    # async def agenerate_answer(self, query: str, stream_it: AsyncIteratorCallbackHandler):
-    #     task = asyncio.create_task(self._agenerate_answer(query, stream_it))
-    #     async for token in stream_it.aiter():
-    #         yield token
-    #     return await task

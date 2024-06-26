@@ -38,6 +38,8 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_experimental.agents import create_pandas_dataframe_agent
 from langchain.callbacks.streaming_stdout import StreamingStdOutCallbackHandler
 from langchain.callbacks.streaming_aiter import AsyncIteratorCallbackHandler
+from langchain_core.runnables.history import RunnableWithMessageHistory
+from langchain_community.chat_message_histories import RedisChatMessageHistory
 
 from milvus_retriever import milvus_retriever
 nest_asyncio.apply()
@@ -50,6 +52,25 @@ formatter = logging.Formatter(u'%(asctime)s [%(levelname)s] %(message)s')
 stream_handler = logging.StreamHandler()
 stream_handler.setFormatter(formatter)
 logger.addHandler(stream_handler)
+
+from typing import Dict, Any
+
+class CustomRedisChatMessageHistory(RedisChatMessageHistory):
+    def __init__(self, session_id: str, user_id: str, url: str):
+        super().__init__(url=url)
+        self.session_id = session_id
+        self.user_id = user_id
+        
+    def _key(self) -> str:
+        return f"chat_history:{self.user_id}:{self.session_id}"
+
+def create_message_history(config: Dict[str, Any]) -> CustomRedisChatMessageHistory:
+    print(config)
+    session_id = config.get("session_id", "")
+    user_id = config.get("user_id", "")
+    redis_url = config.get("redis_url", "")
+    return CustomRedisChatMessageHistory(session_id=session_id, user_id=user_id, url=redis_url)
+
 
     
 class car_manual_generator():
@@ -296,7 +317,17 @@ class car_manual_generator():
         output = await asyncio.gather(*async_map_task)
         return output
     
-    def generate_answer(self, query):
+    async def map_context(self, context_bag, query):
+        
+        async_map_task = [asyncio.create_task(self.map_text_context(context_bag, query))]
+        if len(context_bag['table_csv_urls'])>0:
+            context_root_dir = self.context_path
+            dfs = list(map(lambda x: pd.read_csv(context_root_dir + '/' + x), context_bag['table_csv_urls']))
+            async_map_task.append(asyncio.create_task(self.map_table_context(dfs, query)))
+        output = await asyncio.gather(*async_map_task)
+        return output
+    
+    def generate_answer(self, query, session_id, user_id):
         logger.info("Start searching DB")
         docs, scores = self.get_context(query)
         context_bag = self.create_context_bag(docs)
@@ -318,9 +349,25 @@ class car_manual_generator():
                               streaming=True,
                               callbacks=[StreamingStdOutCallbackHandler()]) 
         qa_reduce_template = ChatPromptTemplate.from_template(self.qa_reduce_prompt)
+        
         reduce_chain = qa_reduce_template | reduce_model | StrOutputParser()
+        
+        with_message_history = RunnableWithMessageHistory(
+            reduce_chain,  # 실행 가능한 객체
+            lambda config: create_message_history(config),  # 메시지 기록을 가져오는 함수
+            input_messages_key="question",  # 입력 메시지의 키
+            history_messages_key="chat_history",  # 기록 메시지의 키
+        )
+        config = {
+                "configurable": {
+                    "session_id": "foo",
+                    "user_id": "bar",
+                    "redis_url": "redis://localhost:6379"
+            }
+        }
+        
         logger.info("Start reducing Context")
-        reduce_answer = reduce_chain.invoke({"query": query, "context":context_answer})
+        reduce_answer = with_message_history.invoke({"query": query, "context":context_answer}, config=config["configurable"])
         logger.info("\nEnd reducing Context")
         
         context_root_dir = self.context_path
@@ -331,8 +378,6 @@ class car_manual_generator():
             display(img)
             
         for img_path in context_bag['table_image_urls']:
-            # TODO: 벡터 DB 구축시 이미지 URL 변경필요
-            # img_path = img_path.split('/')[-1]
             img_path = os.path.join(context_root_dir, img_path)
             img = Image.open(img_path)
             display(img)
@@ -368,12 +413,6 @@ class car_manual_generator():
         
         return reduce_answer, context_bag
     
-    async def agenerate_answer(self, query: str, stream_it: AsyncIteratorCallbackHandler):
-        task = asyncio.create_task(self._agenerate_answer(query, stream_it))
-        async for token in stream_it.aiter():
-            yield token
-        return await task
-        
     # async def agenerate_answer(self, query: str, stream_it: AsyncIteratorCallbackHandler):
     #     async def async_generator():
     #         reduce_answer, _, context_bag, _, _ = await self._agenerate_answer(query, stream_it)

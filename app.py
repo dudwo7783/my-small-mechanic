@@ -123,8 +123,6 @@ class ChatBot:
                         with st.expander("Click to view images"):
                             cols = st.columns(len(image_paths))
                             for i, image_path in enumerate(image_paths):
-                                # print("#1 Image Path")
-                                # print(image_path)
                                 with cols[i]:
                                     st.image(CONTEXT_PATH + '/' + image_path)
 
@@ -159,20 +157,11 @@ class ChatBot:
                                 header, data = part_data[0], part_data[1]
 
                                 if b"Content-Type: text/event-stream" in header:
-                                    # print('after if')
-                                    # print(data)
-                                    print(data.decode("utf-8"))
-                                    # await asyncio.sleep(0.1)
                                     token = data.decode("utf-8")  # .rstrip()
                                     answer += token
                                     response_container.markdown(answer)        
                                 elif b"Content-Type: text/plain" in header:
-                                    # image_data.append(data.strip())
-                                    image_paths = data.decode('utf-8')  # 이미지 경로를 문자열로 변환     
-                            # else: 
-                            #     temp = answer
-                            # unsafe_allow_html=True
-                                
+                                    image_paths = data.decode('utf-8')  # 이미지 경로를 문
                         else:
                             print(image_paths)
                             if image_paths != '':
@@ -195,6 +184,15 @@ class ChatBot:
 
     def side_bar(self):
         with st.sidebar:
+            
+            if st.button("새로운 대화"):
+                st.session_state.clicked = False
+                # st.session_state.session_id = 
+                self.type = 1
+                st.rerun()
+                
+            
+            
             car_model = st.selectbox(
                 "차정",
                 ("IONIQ5 2024", "SANTAFE MX5 2023", "SONATA DN8 2024")
