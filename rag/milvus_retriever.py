@@ -4,19 +4,23 @@ import copy
 
 from openai import OpenAI
 from pymilvus import AnnSearchRequest
-from pymilvus import WeightedRanker
+from pymilvus import WeightedRanker, RRFRanker
 from pymilvus import Collection, connections
 from pymilvus import connections
 from pymilvus.model.sparse import BM25EmbeddingFunction
-
+from pymilvus.model.sparse.bm25.tokenizers import build_default_analyzer
+analyzer = build_default_analyzer(language="kr")
 
 class milvus_retriever():
+    analyzer = build_default_analyzer(language="kr")
+    
     def __init__(self, openai_api_key, namespace, sparse_params, dense_params):
         self.collection = None
         self.collection_name = None
         self.openai_client = OpenAI(api_key=openai_api_key)
         self.namespace = namespace
-        self.bm25_ef = BM25EmbeddingFunction()
+        
+        self.bm25_ef = BM25EmbeddingFunction(milvus_retriever.analyzer)
         self._load_bm25_ef(namespace)
 
         self.sparse_search_params = {
@@ -91,7 +95,7 @@ class milvus_retriever():
             search_dict = {}
         else:
             reqs = [sparse_req, dense_req]    
-            rerank = WeightedRanker(*rerank_weight)
+            rerank = RRFRanker()#WeightedRanker(*rerank_weight)
             res = self.collection.hybrid_search(
                 reqs, 
                 rerank, 

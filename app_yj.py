@@ -1,11 +1,9 @@
-
-
 import random
 import time
 import streamlit as st
-from code_rag.rag import QA
 import sqlite3
 import json
+import ast
 
 from langchain.agents import initialize_agent
 from langchain.agents.tools import Tool
@@ -17,6 +15,9 @@ import httpx
 import asyncio
 from httpx import TimeoutException
 
+CONTEXT_PATH = '/Users/yj/Kim/1.work/SKR/8.GenAI/my-small-mechanic/pdf_context'
+
+
 async def get_streaming_response(namespace, query):
     async with httpx.AsyncClient(timeout=None) as client:
         async with client.stream('GET', 'http://localhost:8000/aget_car_information/', params={'namespace': namespace, 'query': query}) as response:
@@ -27,12 +28,13 @@ async def get_streaming_response(namespace, query):
                 yield chunk
 
 class ChatBot:
-    def __init__(self):
+    def __init__(self, namespace):
         self.messages = []
         self.type=0
         self.id=1
         self.answer = []
         self.set_num = -999
+        self.namespace = namespace
     # 글자 타이핑 되도록 이펙트
     def stream_data(self, text):
         st.toast("답변 생성중입니다......")
@@ -92,7 +94,7 @@ class ChatBot:
                         cols = st.columns(len(image_paths))
                         for i, image_path in enumerate(image_paths):
                             with cols[i]:
-                                st.image(image_path)
+                                st.image(CONTEXT_PATH + '/' + image_path)
             
             asyncio.run(self.handle_user_input(answer_type))
             # Display a message while waiting for the response
@@ -121,85 +123,87 @@ class ChatBot:
                         with st.expander("Click to view images"):
                             cols = st.columns(len(image_paths))
                             for i, image_path in enumerate(image_paths):
-                                # print("#1 Image Path")
-                                # print(image_path)
                                 with cols[i]:
-                                    st.image(image_path)
+                                    st.image(CONTEXT_PATH + '/' + image_path)
 
     async def handle_user_input(self, answer_type):
         user_input = st.chat_input("질문할 내용을 적어주세요: ", key="user_input")
         if user_input:
             
             st.chat_message("user").write(user_input)
-            st.toast("서칭 중......")
+            st.toast("Searching......")
             self.messages.append({"role": "user", "content": user_input})
-            st.toast('Yeaaaaaaaaah',  icon='🎉')
             with st.chat_message("assistant"):
-                
-                # st.write_stream(self.stream_data(assistant_response["text"]))
-                # with st.expander("Click to view images"):
-                #     if assistant_response["image"]!= None:
-                #         image_paths = assistant_response["image"]
-                #         if len(image_paths) != 0:
-                #             cols = st.columns(len(image_paths))
-                #             for i, image_path in enumerate(image_paths):
-                #                 with cols[i]:
-                #                     st.image(image_path)
-                
+                response_container = st.empty()
+                image_container = st.container()
+                answer = ''
+                image_paths = ''
                 with st.spinner("Waiting for response..."):
                     try:
-                        container = st.empty()
-                        # Buffer to store the incoming chunks
                         buffer = b""
                         boundary = b"my-custom-boundary"
-                        image_paths = ''
                         
-                        answer = ''
                         
-
-                        # Get the streaming response from FastAPI
-                        async for chunk in get_streaming_response('SONATA_DN8_2024', user_input):
+                        async for chunk in get_streaming_response(self.namespace, user_input):
                             buffer += chunk.encode('utf-8')  # chunk를 바이트로 변환
                             parts = buffer.split(boundary)
+                            
                             # buffer = parts.pop()
                             # print(buffer)
                             for part in parts:
                                 part_data = part.split(b"\r\n\r\n")
 
-                                if len(part_data) >= 2:
-                                    header, data = part_data[0], part_data[1]
-                                    if b"Content-Type: text/event-stream" in header:
-                                        # print('after if')
-                                        # print(data)
-                                        # logger.info(data.decode("utf-8"))
-                                        # await asyncio.sleep(1)
-                                        token = data.decode("utf-8")  # .rstrip()
-                                        print(token)
-                                        answer += token
-                                        
-                                    elif b"Content-Type: text/plain" in header:
-                                        # image_data.append(data.strip())
-                                        image_paths = data.decode('utf-8')  # 이미지 경로를 문자열로 변환
-                            container.markdown(answer)# unsafe_allow_html=True
+                            if len(part_data) >= 2:
+                                header, data = part_data[0], part_data[1]
+
+                                if b"Content-Type: text/event-stream" in header:
+                                    token = data.decode("utf-8")  # .rstrip()
+                                    answer += token
+                                    response_container.markdown(answer)        
+                                elif b"Content-Type: text/plain" in header:
+                                    image_paths = data.decode('utf-8')  # 이미지 경로를 문
                         else:
-                            with container.expander("Click to view images"):
-                                if len(image_paths) != 0:
-                                    cols = st.columns(len(image_paths))
-                                    for i, image_path in enumerate(image_paths):
-                                        with cols[i]:
-                                            st.image(image_path)
-                            assistant_response = {"text": answer, "image": image_paths}
-                            self.messages.append({"role": "assistant", "content": assistant_response, "answer_type": answer_type})
+                            print(image_paths)
+                            if image_paths != '':
+                                image_paths = ast.literal_eval(image_paths)
+                                response_container.markdown(answer)# unsafe_allow_html=True
+                                with image_container.expander("Click to view images"):
+                                    if len(image_paths) != 0:
+                                        cols = st.columns(len(image_paths))
+                                        for i, image_path in enumerate(image_paths):
+                                            with cols[i]:
+                                                st.image(CONTEXT_PATH + '/' + image_path)
+                                assistant_response = {"text": answer, "image": image_paths}
+                                self.messages.append({"role": "assistant", "content": assistant_response, "answer_type": answer_type})
+                            else:
+                                response_container.markdown(answer)
+                                assistant_response = {"text": answer, "image": None}
+                                self.messages.append({"role": "assistant", "content": assistant_response, "answer_type": answer_type})
                     except TimeoutException:
                         pass
 
     def side_bar(self):
         with st.sidebar:
+            
+            if st.button("새로운 대화"):
+                st.session_state.clicked = False
+                # st.session_state.session_id = 
+                self.type = 1
+                st.rerun()
+                
+            
+            
             car_model = st.selectbox(
                 "차정",
-                ("그랜저", "아이오닉 5", "싼타페", "쏘나타")
+                ("IONIQ5 2024", "SANTAFE MX5 2023", "SONATA DN8 2024")
             )
             st.session_state.car_model = car_model
+            if car_model == 'IONIQ5 2024':
+                self.namespace = 'IONIQ5_2024'
+            if car_model == 'SANTAFE MX5 2023':
+                self.namespace = 'SANTAFE_MX5_2023'
+            if car_model == 'SONATA DN8 2024':
+                self.namespace = 'SONATA_DN8_2024'
             for ind, chat in enumerate(['./messages_1.txt', './messages_2.txt', './messages_3.txt'], 1):
                 with open(chat, "r") as file:
                     # 파일 내용 읽기
@@ -253,16 +257,14 @@ class ChatBot:
 if "chat_bot" not in st.session_state:
     st.session_state.clicked = False
     st.session_state.personal_id=-999
-    st.session_state.car_model = '아이오닉 5'
-
-    st.session_state.chat_bot = ChatBot()
+    st.session_state.car_model = '아이오닉5'
+    
+    if st.session_state.car_model == '아이오닉5':
+        namespace = 'IONIQ5_2024'
+    elif st.session_state.car_model == '산타페 MX5':
+        namespace = 'SANTAFE_MX5_2023'
+    elif st.session_state.car_model == 'SONATA DN8':
+        namespace = 'SONATA_DN8_2024'
+    st.session_state.chat_bot = ChatBot(namespace)
 
 st.session_state.chat_bot.run()
-
-
-
-
-
-
-            # with open("./messages.txt", "w") as file:
-            #     file.write(json.dumps(self.messages))

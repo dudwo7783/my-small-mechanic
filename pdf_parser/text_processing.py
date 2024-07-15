@@ -27,27 +27,37 @@ def remove_invalid_row_by_string(_df):
 
     return df
 
-def remove_invalid_row_by_span(_df):
+def remove_invalid_row_by_span(_df, company='hyundai'):
     df = _df.copy()
-    df = df[~(df['span']=='"(\'HyundaiSansHeadKR\', 0, 14)"')]  # 마, 카, 타
-    df = df[~(df['span']=='"(\'HyundaiSansHeadKR\', 13416, 25)"')]  # 색인
-    df = df[~(df['span']=='"(\'HyundaiSansTextKR\', 16777215, 6)"')]  # 불필요 영어
+    if company == 'hundai':
+        df = df[~(df['span']=='"(\'HyundaiSansHeadKR\', 0, 14)"')]  # 마, 카, 타
+        df = df[~(df['span']=='"(\'HyundaiSansHeadKR\', 13416, 25)"')]  # 색인
+        df = df[~(df['span']=='"(\'HyundaiSansTextKR\', 16777215, 6)"')]  # 불필요 영어
+    elif company == 'tesla':
+        df = df[~(df['span']=='"(\'NotoSansKR-Regular\', 127, 9)"')]  # 공백
     
     return df
 
-def add_header(_df):
+def add_header(_df, company='hyundai'):
     df = _df.copy()
     df['index'] = None
-    h1_span = '"(\'HyundaiSansHeadKR\', 13416, 28)"'
-    h2_span = '"(\'HyundaiSansTextKRMedium\', 13416, 14)"'
-    h3_span = '"(\'HyundaiSansTextKRMedium\', 13416, 12)"'
-    h4_span = '"(\'HyundaiSansTextKRMedium\', 0, 10)"'
-    
-    df.loc[df['span']==h1_span, 'index'] = 'h1'
-    df.loc[df['span']==h2_span, 'index'] = 'h2'
-    df.loc[df['span']==h3_span, 'index'] = 'h3'
-    df.loc[df['span']==h4_span, 'index'] = 'h4'
-    
+    if company == 'hundai':
+        h1_span = '"(\'HyundaiSansHeadKR\', 13416, 28)"'
+        h2_span = '"(\'HyundaiSansTextKRMedium\', 13416, 14)"'
+        h3_span = '"(\'HyundaiSansTextKRMedium\', 13416, 12)"'
+        h4_span = '"(\'HyundaiSansTextKRMedium\', 0, 10)"'
+        
+        df.loc[df['span']==h1_span, 'index'] = 'h1'
+        df.loc[df['span']==h2_span, 'index'] = 'h2'
+        df.loc[df['span']==h3_span, 'index'] = 'h3'
+        df.loc[df['span']==h4_span, 'index'] = 'h4'
+        
+    elif company == 'tesla':
+        h3_span = '"(\'NotoSansKR-Bold\', 0, 14)"'
+        h4_span = '"(\'NotoSansKR-Bold\', 0, 12)"'
+        
+        df.loc[df['span']==h3_span, 'index'] = 'h3'
+        df.loc[df['span']==h4_span, 'index'] = 'h4'
     return df
 
     

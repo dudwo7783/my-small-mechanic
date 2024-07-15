@@ -17,6 +17,9 @@ from langchain.prompts import (
     SystemMessagePromptTemplate, 
     HumanMessagePromptTemplate,
 )
+from langchain_core.runnables.history import RunnableWithMessageHistory
+
+from langchain_community.chat_message_histories import RedisChatMessageHistory
 from langchain.schema import SystemMessage, HumanMessage
 from langchain_openai import OpenAIEmbeddings, ChatOpenAI
 from langchain.callbacks.streaming_stdout import StreamingStdOutCallbackHandler
@@ -38,8 +41,6 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_experimental.agents import create_pandas_dataframe_agent
 from langchain.callbacks.streaming_stdout import StreamingStdOutCallbackHandler
 from langchain.callbacks.streaming_aiter import AsyncIteratorCallbackHandler
-from langchain_core.runnables.history import RunnableWithMessageHistory
-from langchain_community.chat_message_histories import RedisChatMessageHistory
 
 from milvus_retriever import milvus_retriever
 nest_asyncio.apply()
@@ -53,31 +54,12 @@ stream_handler = logging.StreamHandler()
 stream_handler.setFormatter(formatter)
 logger.addHandler(stream_handler)
 
-from typing import Dict, Any
-
-class CustomRedisChatMessageHistory(RedisChatMessageHistory):
-    def __init__(self, session_id: str, user_id: str, url: str):
-        super().__init__(url=url)
-        self.session_id = session_id
-        self.user_id = user_id
-        
-    def _key(self) -> str:
-        return f"chat_history:{self.user_id}:{self.session_id}"
-
-def create_message_history(config: Dict[str, Any]) -> CustomRedisChatMessageHistory:
-    print(config)
-    session_id = config.get("session_id", "")
-    user_id = config.get("user_id", "")
-    redis_url = config.get("redis_url", "")
-    return CustomRedisChatMessageHistory(session_id=session_id, user_id=user_id, url=redis_url)
-
-
     
 class car_manual_generator():
 
-    def __init__(self, openai_api_key, namespace, milvus_host, milvus_port, db_collection_name, topK, llm_model="gpt-3.5-turbo", rrk_weight=(0.3,0.7),
-                 score_filter=True, threshold=0.3, drop_duplicates=False, pandas_llm_model="gpt-3.5-turbo", reduce_model="gpt-3.5-turbo",
-                 map_text_model="gpt-3.5-turbo", context_path='../pdf_context', reranker=None):
+    def __init__(self, openai_api_key, namespace, milvus_host, milvus_port, db_collection_name, topK, llm_model="gpt-4-turbo", rrk_weight=(0.3,0.7),
+                 score_filter=True, threshold=0.3, drop_duplicates=False, pandas_llm_model="gpt-4-turbo", reduce_model="gpt-4-turbo",
+                 map_text_model="gpt-4-turbo", context_path='../pdf_context', reranker=None):
         self.openai_api_key = openai_api_key
         self.namespace = namespace
         self.milvus_host = milvus_host
@@ -100,13 +82,16 @@ class car_manual_generator():
         self.map_text_model = map_text_model
         self.context_path = context_path
         self.reranker = reranker#pipeline("text-classification", model="Dongjin-kr/ko-reranker", device=device)
+        self.redis_url = "redis://localhost:6379"
+        # self.session_id  = session_id
 
 
 
         prompt_dir = path.dirname(path.abspath(__file__)) + '/prompt'
+        with open(prompt_dir + '/system_template.txt', 'r') as f:
+            self.system_prompt = f.read()
         with open(prompt_dir + '/qa_map_template.txt', 'r') as f:
             self.qa_map_prompt = f.read()
-            
         with open(prompt_dir + '/qa_reduce_template.txt', 'r') as f:
             self.qa_reduce_prompt = f.read()
 
@@ -283,7 +268,13 @@ class car_manual_generator():
             
         map_context_chains = {}
         for k, context in context_bag['text_context_bag'].items():
-            qa_map_template = ChatPromptTemplate.from_template(self.qa_map_prompt)
+            # qa_map_template = ChatPromptTemplate.from_template(self.qa_map_prompt)
+            qa_map_template = ChatPromptTemplate.from_messages([
+                ("system", self.system_prompt),
+                ("user", self.qa_map_prompt)
+            ])
+
+
             chain = qa_map_template.partial(context=context) | map_llm | StrOutputParser()
             map_context_chains[f'context{k}'] = chain
             
@@ -317,17 +308,7 @@ class car_manual_generator():
         output = await asyncio.gather(*async_map_task)
         return output
     
-    async def map_context(self, context_bag, query):
-        
-        async_map_task = [asyncio.create_task(self.map_text_context(context_bag, query))]
-        if len(context_bag['table_csv_urls'])>0:
-            context_root_dir = self.context_path
-            dfs = list(map(lambda x: pd.read_csv(context_root_dir + '/' + x), context_bag['table_csv_urls']))
-            async_map_task.append(asyncio.create_task(self.map_table_context(dfs, query)))
-        output = await asyncio.gather(*async_map_task)
-        return output
-    
-    def generate_answer(self, query, session_id, user_id):
+    def generate_answer(self, query):
         logger.info("Start searching DB")
         docs, scores = self.get_context(query)
         context_bag = self.create_context_bag(docs)
@@ -348,26 +329,16 @@ class car_manual_generator():
                               model=self.reduce_model,
                               streaming=True,
                               callbacks=[StreamingStdOutCallbackHandler()]) 
-        qa_reduce_template = ChatPromptTemplate.from_template(self.qa_reduce_prompt)
+        # qa_reduce_template = ChatPromptTemplate.from_template(self.qa_reduce_prompt)
+        qa_reduce_template = ChatPromptTemplate.from_messages([
+                ("system", self.system_prompt),
+                ("user", self.qa_reduce_prompt)
+            ])
         
         reduce_chain = qa_reduce_template | reduce_model | StrOutputParser()
         
-        with_message_history = RunnableWithMessageHistory(
-            reduce_chain,  # 실행 가능한 객체
-            lambda config: create_message_history(config),  # 메시지 기록을 가져오는 함수
-            input_messages_key="question",  # 입력 메시지의 키
-            history_messages_key="chat_history",  # 기록 메시지의 키
-        )
-        config = {
-                "configurable": {
-                    "session_id": "foo",
-                    "user_id": "bar",
-                    "redis_url": "redis://localhost:6379"
-            }
-        }
-        
         logger.info("Start reducing Context")
-        reduce_answer = with_message_history.invoke({"query": query, "context":context_answer}, config=config["configurable"])
+        reduce_answer = reduce_chain.invoke({"query": query, "context":context_answer})
         logger.info("\nEnd reducing Context")
         
         context_root_dir = self.context_path
@@ -385,8 +356,8 @@ class car_manual_generator():
     
     
     
-    async def _agenerate_answer(self, query, stream_it: AsyncIteratorCallbackHandler):
-        logger.info("Start searching DB")
+    async def _agenerate_answer(self, query, session_id, stream_it: AsyncIteratorCallbackHandler):
+        logger.info(f"Start searching DB: {self.namespace}")
         docs, scores = self.get_context(query)
         context_bag = self.create_context_bag(docs)
         logger.info("End searching DB")
@@ -407,17 +378,37 @@ class car_manual_generator():
                               streaming=True,
                               callbacks=[stream_it]) 
         qa_reduce_template = ChatPromptTemplate.from_template(self.qa_reduce_prompt)
+        
+
         reduce_chain = qa_reduce_template | reduce_model | StrOutputParser()
-        logger.info("Start reducing Context")
+        
+
+        # with_message_history = RunnableWithMessageHistory(
+        #     reduce_chain,  # 실행 가능한 객체
+        #     lambda : RedisChatMessageHistory(self.session_id, url=self.redis_url),  # 메시지 기록을 가져오는 함수
+        #     input_messages_key="question",  # 입력 메시지의 키
+        #     history_messages_key="chat_history",  # 기록 메시지의 키
+        # )
+        # config = {"configurable": {"session_id": "foo"}}
+        
+        # logger.info("Start reducing Context")
+        # reduce_answer = await reduce_chain.ainvoke({"query": query, "context":context_answer})
         reduce_answer = await reduce_chain.ainvoke({"query": query, "context":context_answer})
+        history = RedisChatMessageHistory(session_id, url=self.redis_url)
+        history.add_user_message(query)
+        history.add_ai_message(reduce_answer)
+        history_image = RedisChatMessageHistory(session_id+'_image', url=self.redis_url)
+        context_root_dir = self.context_path
+        if (len(context_bag['image_urls'])!=0) or (len(context_bag['table_image_urls'])!=0):
+            context_bag['image_urls'] = [context_root_dir + '/' + img_path for img_path in context_bag['image_urls']]
+            context_bag['table_image_urls'] = [context_root_dir + '/' + img_path for img_path in context_bag['table_image_urls']]
+            # context_bag['table_image_urls'] = [os.path.join(context_root_dir, img_path) for img_path in context_bag['table_image_urls']]
+            image = str(context_bag['image_urls'] + context_bag['table_image_urls'])
+            history_image.add_ai_message(image)
+        else:
+            image = str([])
+            history_image.add_ai_message(image)
+        
         
         return reduce_answer, context_bag
     
-    # async def agenerate_answer(self, query: str, stream_it: AsyncIteratorCallbackHandler):
-    #     async def async_generator():
-    #         reduce_answer, _, context_bag, _, _ = await self._agenerate_answer(query, stream_it)
-    #         for token in reduce_answer:
-    #             yield token, context_bag
-
-    #     async for token, context_bag in async_generator():
-    #         yield token, context_bag

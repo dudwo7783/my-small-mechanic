@@ -14,7 +14,7 @@ from utils import contains_image_name
 
 
 class PDFProcessor:
-    def __init__(self, NAMESPACE, pdf_file, page_start, page_end, y_range=(39, 575), context_file_root_path = '../pdf_context'):
+    def __init__(self, NAMESPACE, pdf_file, page_start, page_end, y_range=(39, 575), context_file_root_path = '../pdf_context', company='hyundai'):
         
         self.NAMESPACE = NAMESPACE
         
@@ -48,10 +48,16 @@ class PDFProcessor:
         self.y_range = y_range
         self.context_file_root_path = context_file_root_path
         
+        if company=='hyndai':
+            self.column_divider_coords = self.fitz_canvas_page.rect.width / 2
+        elif company == 'tesla':
+            self.column_divider_coords = 300
+        
         
     def __next__(self):
         
         if self.page_num < self.page_end:
+            self.page_num += 1
             self.fitz_page = self.doc.load_page(self.page_num)
             self.fitz_canvas_page = self.canvas_doc.load_page(self.page_num)
             self.plumber_page = self.plumber_doc.pages[self.page_num]
@@ -59,7 +65,7 @@ class PDFProcessor:
             self.image_processor = ImageProcessor(self.fitz_page, self.page_num, self.NAMESPACE, 
                                               self.context_file_root_path, 
                                               font_path="/Users/yj/Kim/1.work/SKR/8.GenAI/my-small-mechanic/pdf_parser/font/NanumGothicBold.ttf", font_size=16)
-            self.page_num += 1
+            
             return self
             
         else:
@@ -74,7 +80,26 @@ class PDFProcessor:
                                               self.context_file_root_path, 
                                               font_path="/Users/yj/Kim/1.work/SKR/8.GenAI/my-small-mechanic/pdf_parser/font/NanumGothicBold.ttf", font_size=16)
         
-    
+        
+    def show_page(self):
+        canvas_doc = fitz.open(self.pdf_file)
+        fitz_canvas_page = canvas_doc.load_page(self.page_num)
+        text_rotation = self.is_text_rotate(fitz_canvas_page)
+        if text_rotation:
+            fitz_canvas_page.set_rotation(90)
+            
+        is_two_column = self.analyze_page_layout(fitz_canvas_page, text_rotation)
+        blocks = fitz_canvas_page.get_text("dict")["blocks"]
+        blocks_sorted = self.sort_blocks(blocks, is_two_column, fitz_canvas_page.rect.width / 2, fitz_canvas_page.rotation)
+
+        for block in blocks_sorted:
+            x0, y0, x1, y1 = block['bbox']
+            fitz_canvas_page.draw_rect(fitz.Rect(x0, y0, x1, y1), color=(1, 0, 0), width=2)
+            
+        pix = fitz_canvas_page.get_pixmap(dpi=150)  # render page to an internal image format
+        pix.save(f"./pdf_parser/temp/{self.NAMESPACE}/page-{fitz_canvas_page.number}.png") 
+
+
     def parse_pdf(self):
         spans_list = []
         contents_list = []
@@ -83,9 +108,11 @@ class PDFProcessor:
         contents_type = []
         block_list = []
         
+        self.table_areas = []
+        self.origin_table_areas = []
         
         page_tables = self.table_processor.extract_tables()
-        if page_tables.fitz_dfs is not None:
+        if (page_tables.fitz_dfs is not None) and (len(page_tables.fitz_dfs)!=0):
             self.table_areas = self.table_processor.table_areas.copy()
             self.origin_table_areas = self.table_processor.origin_table_areas.copy()
             
@@ -104,7 +131,7 @@ class PDFProcessor:
             
         is_two_column = self.analyze_page_layout(self.fitz_page, text_rotation)
         blocks = self.fitz_page.get_text("dict")["blocks"]
-        blocks_sorted = self.sort_blocks(blocks, is_two_column, self.fitz_page.rect.width / 2, self.fitz_page.rotation)
+        blocks_sorted = self.sort_blocks(blocks, is_two_column, self.column_divider_coords, self.fitz_page.rotation)
         
         prev_overlap_tbl_num=-1
         prev_text = ""
@@ -123,7 +150,7 @@ class PDFProcessor:
                         overlapping=True
                         if tbl_num != prev_overlap_tbl_num:
                             spans_list.append(None)
-                            tbl_df, content = self.table_processor.post_processing_table(self.tables[tbl_num], text_rotation)
+                            tbl_df, content = self.table_processor.post_processing_table(self.tables[tbl_num], text_rotation, company='tesla')
                             
                             csv_url_root_dir = self.context_file_root_path
                             tbl_csv_file_path = os.path.join('csv', self.NAMESPACE, f'{self.page_num}_{tbl_num}_table.csv')
@@ -243,6 +270,10 @@ class PDFProcessor:
         tbls = page.find_tables().tables
         is_two_column = True
         blocks = page.get_text("dict")["blocks"]
+        blocks = [
+            b for b in blocks 
+            if b['bbox'][1] >= self.y_range[0] and b['bbox'][3] <= self.y_range[1]
+        ]
 
         # 텍스트가 로테이트 되어있거나,
         if text_rotate:
@@ -295,7 +326,6 @@ class TableProcessor:
         self.fitz_page = fitz_page
         self.plumber_page = plumber_page
         self.fitz_tbl_list, self.table_areas, self.origin_table_areas = self.extract_fitz_tables()
-        
 
         
     def extract_fitz_tables(self):
@@ -657,7 +687,7 @@ class TableProcessor:
             
         return process_table_list, fail_idx
 
-    def post_processing_table(self, df, text_rotation=False):
+    def post_processing_table(self, df, text_rotation=False, company='hyundai'):
         df.columns = df.columns = [re.sub(r'^\d+-', '', col) for col in df.columns]
         null_sum = df.isnull().sum()
         null_cols = null_sum[null_sum == df.shape[0]].index
@@ -686,13 +716,13 @@ class TableProcessor:
                 
         df.columns = df_cols
         df = df.fillna('')
-        img_index = df.applymap(lambda x: contains_image_name(x))
         
-        df[img_index] = '이미지 참조'
         
+        if company == 'hyundai':
+            img_index = df.applymap(lambda x: contains_image_name(x))
+            df[img_index] = '이미지 참조'
+            
         df_md = df.to_markdown()
-        
-        
         return df, df_md    
     
 class ImageProcessor:
@@ -722,7 +752,7 @@ class ImageProcessor:
             self.fitz_page.set_rotation(90)
             
         img_root_dir = self.context_file_root_path
-        img_file_path = f"image/{self.NAMESPACE}/f'{self.page_num}_{index}_table.{ext}'"
+        img_file_path = f"image/{self.NAMESPACE}/{self.page_num}_{index}_table.{ext}"
         img_url = os.path.join(img_root_dir, img_file_path)
         image.save(img_url)
         return img_file_path
@@ -748,7 +778,7 @@ class ImageProcessor:
         
         
         img_root_dir = self.context_file_root_path
-        img_file_path = f"image/{self.NAMESPACE}/f'{self.page_num}_{index}_img.{ext}'"
+        img_file_path = f"image/{self.NAMESPACE}/{self.page_num}_{index}_img.{ext}"
         img_url = os.path.join(img_root_dir, img_file_path)
         image.save(img_url)
         return img_file_path
@@ -756,4 +786,61 @@ class ImageProcessor:
 
         
 
-        
+
+if __name__ == "__main__":
+    NAMESPACE = 'TESLA_MODEL3'
+    pdf_file = '/Users/yj/Kim/1.work/SKR/8.GenAI/my-small-mechanic/pdf_parser/pdf/TESLA_MODEL3.pdf'
+    context_file_root_path = '/Users/yj/Kim/1.work/SKR/8.GenAI/my-small-mechanic/pdf_context'
+
+    os.makedirs(context_file_root_path + f'/image/{NAMESPACE}', exist_ok=True)
+    os.makedirs(context_file_root_path + f'/csv/{NAMESPACE}', exist_ok=True)
+    os.makedirs(context_file_root_path + f'/text/{NAMESPACE}', exist_ok=True)
+    context_text_dir = context_file_root_path + f'/text/{NAMESPACE}'
+
+    # fitz_page_start = 7
+    # fitz_page_end = 237
+    fitz_page_start = 153
+    fitz_page_end = 153
+    TESLA_Y_RANGE = (39,775)
+    pdf_processor = PDFProcessor(NAMESPACE, pdf_file, fitz_page_start, fitz_page_end, y_range=(39,775), context_file_root_path = context_file_root_path)
+    
+    span_list = []
+    contents_list = []
+    img_urls = []
+    csv_urls = []
+    contents_type = []
+    block_nums = []
+    while 1:
+        try:
+            if pdf_processor.page_num % 50 == 0:
+                print(f"Processing page {pdf_processor.page_num}")
+            pdf_processor.show_page()
+            page_result = pdf_processor.parse_pdf()
+            
+            span_list.extend(page_result['span'])
+            contents_list.extend(page_result['contents'])
+            csv_urls.extend(page_result['csv_urls'])
+            img_urls.extend(page_result['img_urls'])
+            contents_type.extend(page_result['contents_type'])
+            block_nums.extend(page_result['block_num'])
+            next(pdf_processor)
+            
+
+        except StopIteration as e:
+            print('End of processing', e)
+            break
+        except Exception as e:
+            print(f"Error raised: {e}, page_num: {pdf_processor.page_num}")
+            break
+    df = pd.DataFrame({
+        'span': span_list,
+        'contents': contents_list,
+        'csv_urls': csv_urls,
+        'img_urls': img_urls,
+        'ctype': contents_type,
+        'block_num': block_nums
+    })
+
+    df = df[(df['ctype']=='image') | (~df['contents'].isna())]
+    df.to_csv(f'{context_text_dir}/{NAMESPACE}_result.csv', index=False)
+    df.to_parquet(f'{context_text_dir}/{NAMESPACE}_result.parquet', index=False)

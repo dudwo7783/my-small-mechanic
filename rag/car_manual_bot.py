@@ -356,7 +356,7 @@ class car_manual_generator():
     
     
     
-    async def _agenerate_answer(self, query, stream_it: AsyncIteratorCallbackHandler):
+    async def _agenerate_answer(self, query, session_id, stream_it: AsyncIteratorCallbackHandler):
         logger.info(f"Start searching DB: {self.namespace}")
         docs, scores = self.get_context(query)
         context_bag = self.create_context_bag(docs)
@@ -380,7 +380,6 @@ class car_manual_generator():
         qa_reduce_template = ChatPromptTemplate.from_template(self.qa_reduce_prompt)
         
 
-
         reduce_chain = qa_reduce_template | reduce_model | StrOutputParser()
         
 
@@ -395,6 +394,20 @@ class car_manual_generator():
         # logger.info("Start reducing Context")
         # reduce_answer = await reduce_chain.ainvoke({"query": query, "context":context_answer})
         reduce_answer = await reduce_chain.ainvoke({"query": query, "context":context_answer})
+        history = RedisChatMessageHistory(session_id, url=self.redis_url)
+        history.add_user_message(query)
+        history.add_ai_message(reduce_answer)
+        history_image = RedisChatMessageHistory(session_id+'_image', url=self.redis_url)
+        context_root_dir = self.context_path
+        if (len(context_bag['image_urls'])!=0) or (len(context_bag['table_image_urls'])!=0):
+            context_bag['image_urls'] = [context_root_dir + '/' + img_path for img_path in context_bag['image_urls']]
+            context_bag['table_image_urls'] = [context_root_dir + '/' + img_path for img_path in context_bag['table_image_urls']]
+            # context_bag['table_image_urls'] = [os.path.join(context_root_dir, img_path) for img_path in context_bag['table_image_urls']]
+            image = str(context_bag['image_urls'] + context_bag['table_image_urls'])
+            history_image.add_ai_message(image)
+        else:
+            image = str([])
+            history_image.add_ai_message(image)
         
         
         return reduce_answer, context_bag
